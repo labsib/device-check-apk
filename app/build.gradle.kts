@@ -38,4 +38,5 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.gms:play-services-ads-identifier:18.1.0")
 }
