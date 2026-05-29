@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
         val btnShare = findViewById<Button>(R.id.btnShare)
 
         collectAll()
+        prependConsistencyReport()
         tv.text = sb.toString()
 
         btnCopy.setOnClickListener {
@@ -662,6 +663,453 @@ class MainActivity : AppCompatActivity() {
                 .replace("isLimitAdTrackingEnabled: [loading async...]", "isLimitAdTrackingEnabled: $lat")
                 .replace("frida.status (port scan): [loading async...]", "frida.status (port scan): $fridaStatus")
             tv.text = txt
+        }
+    }
+
+    // ----------- consistency checks -----------
+
+    private data class Check(
+        val name: String,
+        val aLabel: String, val a: String,
+        val bLabel: String, val b: String,
+        val status: Status,
+        val note: String = ""
+    )
+
+    private enum class Status { OK, MISMATCH, SKIP }
+
+    private fun prependConsistencyReport() {
+        val checks = mutableListOf<Check>()
+
+        // === Build.* vs ro.product.* / ro.build.* ===
+        check(checks, "manufacturer",
+            "Build.MANUFACTURER", Build.MANUFACTURER,
+            "ro.product.manufacturer", sysProp("ro.product.manufacturer"))
+        check(checks, "brand",
+            "Build.BRAND", Build.BRAND,
+            "ro.product.brand", sysProp("ro.product.brand"))
+        check(checks, "model",
+            "Build.MODEL", Build.MODEL,
+            "ro.product.model", sysProp("ro.product.model"))
+        check(checks, "device",
+            "Build.DEVICE", Build.DEVICE,
+            "ro.product.device", sysProp("ro.product.device"))
+        check(checks, "product",
+            "Build.PRODUCT", Build.PRODUCT,
+            "ro.product.name", sysProp("ro.product.name"))
+        check(checks, "board",
+            "Build.BOARD", Build.BOARD,
+            "ro.product.board", sysProp("ro.product.board"))
+        check(checks, "hardware",
+            "Build.HARDWARE", Build.HARDWARE,
+            "ro.hardware", sysProp("ro.hardware"))
+        check(checks, "hardware_boot",
+            "Build.HARDWARE", Build.HARDWARE,
+            "ro.boot.hardware", sysProp("ro.boot.hardware"))
+        check(checks, "bootloader",
+            "Build.BOOTLOADER", Build.BOOTLOADER,
+            "ro.bootloader", sysProp("ro.bootloader"))
+        check(checks, "bootloader_boot",
+            "Build.BOOTLOADER", Build.BOOTLOADER,
+            "ro.boot.bootloader", sysProp("ro.boot.bootloader"))
+        check(checks, "fingerprint",
+            "Build.FINGERPRINT", Build.FINGERPRINT,
+            "ro.build.fingerprint", sysProp("ro.build.fingerprint"))
+        check(checks, "build.id",
+            "Build.ID", Build.ID,
+            "ro.build.id", sysProp("ro.build.id"))
+        check(checks, "display.id",
+            "Build.DISPLAY", Build.DISPLAY,
+            "ro.build.display.id", sysProp("ro.build.display.id"))
+        check(checks, "build.host",
+            "Build.HOST", Build.HOST,
+            "ro.build.host", sysProp("ro.build.host"))
+        check(checks, "build.user",
+            "Build.USER", Build.USER,
+            "ro.build.user", sysProp("ro.build.user"))
+        check(checks, "build.tags",
+            "Build.TAGS", Build.TAGS,
+            "ro.build.tags", sysProp("ro.build.tags"))
+        check(checks, "build.type",
+            "Build.TYPE", Build.TYPE,
+            "ro.build.type", sysProp("ro.build.type"))
+        check(checks, "version.release",
+            "Build.VERSION.RELEASE", Build.VERSION.RELEASE,
+            "ro.build.version.release", sysProp("ro.build.version.release"))
+        check(checks, "version.sdk",
+            "Build.VERSION.SDK_INT", Build.VERSION.SDK_INT.toString(),
+            "ro.build.version.sdk", sysProp("ro.build.version.sdk"))
+        check(checks, "version.incremental",
+            "Build.VERSION.INCREMENTAL", Build.VERSION.INCREMENTAL,
+            "ro.build.version.incremental", sysProp("ro.build.version.incremental"))
+        check(checks, "security_patch",
+            "Build.VERSION.SECURITY_PATCH", Build.VERSION.SECURITY_PATCH,
+            "ro.build.version.security_patch", sysProp("ro.build.version.security_patch"))
+        check(checks, "serialno",
+            "Build.SERIAL", safe { @Suppress("DEPRECATION") Build.SERIAL },
+            "ro.serialno", sysProp("ro.serialno"))
+        check(checks, "serialno_boot",
+            "ro.serialno", sysProp("ro.serialno"),
+            "ro.boot.serialno", sysProp("ro.boot.serialno"))
+
+        // === vendor overlay ===
+        check(checks, "vendor.manufacturer",
+            "ro.product.manufacturer", sysProp("ro.product.manufacturer"),
+            "ro.vendor.product.manufacturer", sysProp("ro.vendor.product.manufacturer"))
+        check(checks, "vendor.model",
+            "ro.product.model", sysProp("ro.product.model"),
+            "ro.vendor.product.model", sysProp("ro.vendor.product.model"))
+
+        // === ABIs ===
+        check(checks, "cpu.abilist",
+            "Build.SUPPORTED_ABIS", Build.SUPPORTED_ABIS.joinToString(","),
+            "ro.product.cpu.abilist", sysProp("ro.product.cpu.abilist"))
+        check(checks, "cpu.abi (primary)",
+            "Build.SUPPORTED_ABIS[0]", Build.SUPPORTED_ABIS.firstOrNull() ?: "",
+            "ro.product.cpu.abi", sysProp("ro.product.cpu.abi"))
+
+        // === baseband / SOC ===
+        check(checks, "baseband",
+            "Build.getRadioVersion()", safe { Build.getRadioVersion() },
+            "gsm.version.baseband", sysProp("gsm.version.baseband"))
+
+        // === Telephony vs gsm.* sysprops ===
+        try {
+            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            check(checks, "operator.numeric (network)",
+                "tm.networkOperator", tm.networkOperator ?: "",
+                "gsm.operator.numeric", sysProp("gsm.operator.numeric"))
+            check(checks, "operator.alpha (network)",
+                "tm.networkOperatorName", tm.networkOperatorName ?: "",
+                "gsm.operator.alpha", sysProp("gsm.operator.alpha"))
+            check(checks, "operator.iso (network)",
+                "tm.networkCountryIso", tm.networkCountryIso ?: "",
+                "gsm.operator.iso-country", sysProp("gsm.operator.iso-country"))
+            check(checks, "sim.operator.numeric",
+                "tm.simOperator", tm.simOperator ?: "",
+                "gsm.sim.operator.numeric", sysProp("gsm.sim.operator.numeric"))
+            check(checks, "sim.operator.alpha",
+                "tm.simOperatorName", tm.simOperatorName ?: "",
+                "gsm.sim.operator.alpha", sysProp("gsm.sim.operator.alpha"))
+
+            // SIM country vs locale country — informational, often mismatches legitimately
+            val simCountry = (tm.simCountryIso ?: "").lowercase()
+            val localeCountry = Locale.getDefault().country.lowercase()
+            if (simCountry.isNotEmpty() && localeCountry.isNotEmpty()) {
+                val status = if (simCountry == localeCountry) Status.OK else Status.MISMATCH
+                checks.add(Check("sim.country vs locale.country",
+                    "tm.simCountryIso", simCountry,
+                    "Locale.country", localeCountry,
+                    status, "informational — often legit mismatch (roaming, expat)"))
+            }
+        } catch (_: Throwable) {}
+
+        // === timezone / locale sysprops ===
+        check(checks, "timezone",
+            "TimeZone.getDefault().id", TimeZone.getDefault().id,
+            "persist.sys.timezone", sysProp("persist.sys.timezone"))
+        check(checks, "locale",
+            "Locale.getDefault().toString()", Locale.getDefault().toString().replace('_', '-'),
+            "persist.sys.locale", sysProp("persist.sys.locale"))
+
+        // === Bluetooth MAC sources ===
+        try {
+            @Suppress("DEPRECATION")
+            val ad = android.bluetooth.BluetoothAdapter.getDefaultAdapter()
+            if (ad != null) {
+                val apiAddr = safe { ad.address ?: "" }
+                val secureAddr = safe { Settings.Secure.getString(contentResolver, "bluetooth_address") ?: "" }
+                check(checks, "bluetooth.mac",
+                    "BluetoothAdapter.getAddress()", apiAddr,
+                    "Settings.Secure bluetooth_address", secureAddr)
+            }
+        } catch (_: Throwable) {}
+
+        // === WiFi MAC sources ===
+        val wlanMac = safe {
+            NetworkInterface.getByName("wlan0")?.hardwareAddress
+                ?.joinToString(":") { "%02x".format(it) } ?: ""
+        }
+        val wifiInfoMac = safe {
+            @Suppress("DEPRECATION")
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION")
+            wm.connectionInfo?.macAddress ?: ""
+        }
+        check(checks, "wifi.mac",
+            "NetworkInterface(wlan0).hardwareAddress", wlanMac,
+            "WifiInfo.getMacAddress()", wifiInfoMac)
+
+        // === Fingerprint parsing — internal consistency ===
+        // Format: BRAND/PRODUCT/DEVICE:VERSION.RELEASE/ID/INCREMENTAL:TYPE/TAGS
+        val fp = Build.FINGERPRINT
+        val parsed = parseFingerprint(fp)
+        if (parsed != null) {
+            checks.add(Check("fingerprint.brand component",
+                "fingerprint[brand]", parsed["brand"] ?: "",
+                "Build.BRAND", Build.BRAND,
+                eqStatus(parsed["brand"], Build.BRAND),
+                "fingerprint must embed BRAND"))
+            checks.add(Check("fingerprint.product component",
+                "fingerprint[product]", parsed["product"] ?: "",
+                "Build.PRODUCT", Build.PRODUCT,
+                eqStatus(parsed["product"], Build.PRODUCT)))
+            checks.add(Check("fingerprint.device component",
+                "fingerprint[device]", parsed["device"] ?: "",
+                "Build.DEVICE", Build.DEVICE,
+                eqStatus(parsed["device"], Build.DEVICE)))
+            checks.add(Check("fingerprint.release component",
+                "fingerprint[release]", parsed["release"] ?: "",
+                "Build.VERSION.RELEASE", Build.VERSION.RELEASE,
+                eqStatus(parsed["release"], Build.VERSION.RELEASE)))
+            checks.add(Check("fingerprint.id component",
+                "fingerprint[id]", parsed["id"] ?: "",
+                "Build.ID", Build.ID,
+                eqStatus(parsed["id"], Build.ID)))
+            checks.add(Check("fingerprint.incremental component",
+                "fingerprint[incremental]", parsed["incremental"] ?: "",
+                "Build.VERSION.INCREMENTAL", Build.VERSION.INCREMENTAL,
+                eqStatus(parsed["incremental"], Build.VERSION.INCREMENTAL)))
+            checks.add(Check("fingerprint.type component",
+                "fingerprint[type]", parsed["type"] ?: "",
+                "Build.TYPE", Build.TYPE,
+                eqStatus(parsed["type"], Build.TYPE)))
+            checks.add(Check("fingerprint.tags component",
+                "fingerprint[tags]", parsed["tags"] ?: "",
+                "Build.TAGS", Build.TAGS,
+                eqStatus(parsed["tags"], Build.TAGS)))
+        }
+
+        // === SOC vs CPU info (API 31+) ===
+        if (Build.VERSION.SDK_INT >= 31) {
+            val soc = Build.SOC_MANUFACTURER.lowercase()
+            val hw = Build.HARDWARE.lowercase()
+            // very rough: SOC manufacturer hint should match hardware string family
+            val expected = mapOf(
+                "qualcomm" to listOf("qcom", "msm", "sdm", "sm"),
+                "mediatek" to listOf("mt"),
+                "samsung" to listOf("exynos", "universal"),
+                "google" to listOf("gs", "tensor"),
+                "huawei" to listOf("kirin", "hi"),
+                "unisoc" to listOf("ums", "sp", "sc")
+            )
+            val expectedPrefixes = expected.entries.firstOrNull { soc.contains(it.key) }?.value
+            if (expectedPrefixes != null && hw.isNotEmpty()) {
+                val ok = expectedPrefixes.any { hw.startsWith(it) }
+                checks.add(Check("SOC vs hardware family",
+                    "Build.SOC_MANUFACTURER", Build.SOC_MANUFACTURER,
+                    "Build.HARDWARE", Build.HARDWARE,
+                    if (ok) Status.OK else Status.MISMATCH,
+                    "SoC family must align with hardware string (qcom/mt/exynos/...)"))
+            }
+        }
+
+        // === GL renderer vs SOC family ===
+        try {
+            val gl = collectGlInfo()
+            val renderer = (gl["renderer"] ?: "").lowercase()
+            val hw = Build.HARDWARE.lowercase()
+            val expectGpu = when {
+                hw.startsWith("qcom") || hw.startsWith("sdm") || hw.startsWith("sm") || hw.startsWith("msm") -> "adreno"
+                hw.startsWith("mt") -> "mali"
+                hw.startsWith("exynos") || hw.startsWith("universal") -> "mali"
+                hw.startsWith("kirin") -> "mali"
+                hw.startsWith("gs") || hw.contains("tensor") -> "mali"
+                else -> null
+            }
+            if (expectGpu != null && renderer.isNotEmpty()) {
+                val ok = renderer.contains(expectGpu)
+                checks.add(Check("GPU renderer vs SOC family",
+                    "GL_RENDERER", gl["renderer"] ?: "",
+                    "Build.HARDWARE family", hw,
+                    if (ok) Status.OK else Status.MISMATCH,
+                    "$expectGpu expected for $hw family"))
+            }
+            // emulator-typical GPU strings
+            val emuStrings = listOf("swiftshader", "angle", "virgl", "llvmpipe", "google swiftshader", "android emulator")
+            if (emuStrings.any { renderer.contains(it) }) {
+                checks.add(Check("GPU renderer = emulator-typical",
+                    "GL_RENDERER", gl["renderer"] ?: "",
+                    "expected", "physical GPU (Adreno/Mali/PowerVR/etc.)",
+                    Status.MISMATCH,
+                    "renderer string is a software/emulator GPU"))
+            }
+        } catch (_: Throwable) {}
+
+        // === Widevine L1 vs unlocked bootloader (legitimate Android can't have both) ===
+        try {
+            val drm = MediaDrm(UUID(-0x121074568629b532L, -0x5c37d8232ae2de13L))
+            val level = drm.getPropertyString("securityLevel")
+            val locked = sysProp("ro.boot.flash.locked")
+            val vbs = sysProp("ro.boot.verifiedbootstate")
+            if (Build.VERSION.SDK_INT >= 28) drm.close() else @Suppress("DEPRECATION") drm.release()
+            if (level == "L1" && (locked == "0" || vbs == "orange" || vbs == "yellow" || vbs == "red")) {
+                checks.add(Check("Widevine L1 + unlocked bootloader",
+                    "widevine.securityLevel", level,
+                    "ro.boot.flash.locked / verifiedbootstate", "$locked / $vbs",
+                    Status.MISMATCH,
+                    "L1 normally requires locked verified boot — possible Widevine cert leak / DRM spoof"))
+            }
+        } catch (_: Throwable) {}
+
+        // === sensors that should exist on a real phone ===
+        try {
+            val sm = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            val mandatory = listOf(
+                Sensor.TYPE_ACCELEROMETER to "accelerometer",
+                Sensor.TYPE_GYROSCOPE to "gyroscope",
+                Sensor.TYPE_MAGNETIC_FIELD to "magnetometer",
+                Sensor.TYPE_LIGHT to "light",
+                Sensor.TYPE_PROXIMITY to "proximity"
+            )
+            val missing = mandatory.filter { sm.getDefaultSensor(it.first) == null }.map { it.second }
+            if (missing.isNotEmpty()) {
+                checks.add(Check("sensors missing",
+                    "expected", mandatory.joinToString { it.second },
+                    "missing", missing.joinToString(),
+                    Status.MISMATCH,
+                    "real phones have all of these; emulators/sparse fakes don't"))
+            } else {
+                checks.add(Check("sensors present",
+                    "expected", mandatory.joinToString { it.second },
+                    "actual", "all present",
+                    Status.OK, ""))
+            }
+        } catch (_: Throwable) {}
+
+        // === build epoch vs security patch sanity ===
+        try {
+            val buildTime = Build.TIME
+            val patch = Build.VERSION.SECURITY_PATCH // "YYYY-MM-DD"
+            val parts = patch.split("-")
+            if (parts.size == 3) {
+                val cal = java.util.Calendar.getInstance()
+                cal.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt(), 0, 0, 0)
+                val patchTime = cal.timeInMillis
+                val diffDays = (buildTime - patchTime) / 86_400_000L
+                val status = if (kotlin.math.abs(diffDays) > 365) Status.MISMATCH else Status.OK
+                checks.add(Check("Build.TIME vs SECURITY_PATCH",
+                    "Build.TIME", java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date(buildTime)),
+                    "SECURITY_PATCH", patch,
+                    status,
+                    "Δ=${diffDays}d — large gap often indicates inconsistent fakes"))
+            }
+        } catch (_: Throwable) {}
+
+        // === debuggable / adb / root signals — risk indicators (informational) ===
+        val rooted = listOf(
+            "/system/bin/su", "/system/xbin/su", "/sbin/su",
+            "/su/bin/su", "/data/local/xbin/su"
+        ).any { File(it).exists() }
+        val magisk = listOf(
+            "/sbin/.magisk", "/data/adb/magisk", "/data/adb/magisk.db"
+        ).any { File(it).exists() }
+        val testKeys = Build.TAGS?.contains("test-keys") == true
+        val debuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        val vbs = sysProp("ro.boot.verifiedbootstate")
+        val locked = sysProp("ro.boot.flash.locked")
+        val riskSignals = buildList {
+            if (rooted) add("su binary")
+            if (magisk) add("magisk paths")
+            if (testKeys) add("test-keys build")
+            if (debuggable) add("debuggable build")
+            if (vbs.isNotEmpty() && vbs != "green") add("verifiedbootstate=$vbs")
+            if (locked.isNotEmpty() && locked != "1") add("flash.locked=$locked")
+        }
+        checks.add(Check("Integrity signals",
+            "expected", "none of: su, magisk, test-keys, debuggable, unlocked/non-green boot",
+            "found", riskSignals.joinToString().ifEmpty { "none" },
+            if (riskSignals.isEmpty()) Status.OK else Status.MISMATCH,
+            "any signal here will likely be picked up by Play Integrity / SafetyNet"))
+
+        renderChecks(checks)
+    }
+
+    private fun renderChecks(checks: List<Check>) {
+        val mismatch = checks.count { it.status == Status.MISMATCH }
+        val ok = checks.count { it.status == Status.OK }
+        val skip = checks.count { it.status == Status.SKIP }
+
+        val out = StringBuilder()
+        out.append("=== CONSISTENCY CHECKS ===\n")
+        out.append("Summary: ").append(checks.size).append(" total | ")
+            .append("[!!] ").append(mismatch).append(" mismatch | ")
+            .append("[OK] ").append(ok).append(" ok | ")
+            .append("[--] ").append(skip).append(" skipped (empty data)\n")
+        out.append("Legend: [!!] mismatch (LIKELY DETECTABLE) | [OK] consistent | [--] no data to compare\n\n")
+
+        // mismatches first
+        out.append("--- MISMATCHES (most important) ---\n")
+        val ms = checks.filter { it.status == Status.MISMATCH }
+        if (ms.isEmpty()) out.append("  (none)\n")
+        for (c in ms) out.append(formatCheck(c))
+
+        out.append("\n--- OK ---\n")
+        for (c in checks.filter { it.status == Status.OK }) out.append(formatCheck(c))
+
+        out.append("\n--- SKIPPED (no data) ---\n")
+        for (c in checks.filter { it.status == Status.SKIP }) out.append(formatCheck(c))
+
+        sb.insert(0, out.toString())
+    }
+
+    private fun formatCheck(c: Check): String {
+        val mark = when (c.status) {
+            Status.OK -> "[OK]"
+            Status.MISMATCH -> "[!!]"
+            Status.SKIP -> "[--]"
+        }
+        val sb = StringBuilder()
+        sb.append(mark).append(' ').append(c.name).append('\n')
+        sb.append("     ").append(c.aLabel).append(" = '").append(c.a).append("'\n")
+        sb.append("     ").append(c.bLabel).append(" = '").append(c.b).append("'\n")
+        if (c.note.isNotEmpty()) sb.append("     note: ").append(c.note).append('\n')
+        return sb.toString()
+    }
+
+    private fun check(into: MutableList<Check>, name: String,
+                      aLabel: String, a: String?, bLabel: String, b: String?) {
+        val sa = (a ?: "").trim()
+        val sb = (b ?: "").trim()
+        val status = if (sa.isEmpty() || sb.isEmpty()) Status.SKIP else eqStatus(sa, sb)
+        into.add(Check(name, aLabel, sa, bLabel, sb, status))
+    }
+
+    private fun eqStatus(a: String?, b: String?): Status {
+        val sa = (a ?: "").trim()
+        val sb = (b ?: "").trim()
+        return when {
+            sa.isEmpty() || sb.isEmpty() -> Status.SKIP
+            sa.equals(sb, ignoreCase = true) -> Status.OK
+            else -> Status.MISMATCH
+        }
+    }
+
+    private fun parseFingerprint(fp: String): Map<String, String>? {
+        // BRAND/PRODUCT/DEVICE:VERSION.RELEASE/ID/INCREMENTAL:TYPE/TAGS
+        return try {
+            val firstColon = fp.indexOf(':')
+            val lastColon = fp.lastIndexOf(':')
+            if (firstColon < 0 || lastColon <= firstColon) return null
+            val left = fp.substring(0, firstColon)            // BRAND/PRODUCT/DEVICE
+            val middle = fp.substring(firstColon + 1, lastColon) // VERSION.RELEASE/ID/INCREMENTAL
+            val right = fp.substring(lastColon + 1)           // TYPE/TAGS
+            val leftP = left.split('/')
+            val midP = middle.split('/')
+            val rightP = right.split('/')
+            if (leftP.size < 3 || midP.size < 3 || rightP.size < 2) return null
+            mapOf(
+                "brand" to leftP[0],
+                "product" to leftP[1],
+                "device" to leftP[2],
+                "release" to midP[0],
+                "id" to midP[1],
+                "incremental" to midP.drop(2).joinToString("/"),
+                "type" to rightP[0],
+                "tags" to rightP.drop(1).joinToString("/")
+            )
+        } catch (_: Throwable) {
+            null
         }
     }
 
